@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-note-linter",
+  "name": "Note Linter",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Passive health metrics and linting for your notes.",
+  "author": "Antigravity",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
