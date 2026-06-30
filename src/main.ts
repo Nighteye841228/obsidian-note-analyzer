@@ -3,6 +3,7 @@ import { LinterSettings, NoteMetrics, LinterWarning } from "./types";
 import { DEFAULT_SETTINGS } from "./constants";
 import { evaluateNote } from "./rules";
 import { LinterDashboardView, DASHBOARD_VIEW_TYPE } from "./dashboard";
+import { LinterSettingTab } from "./settings";
 
 export default class NoteLinterPlugin extends Plugin {
   settings: LinterSettings;
@@ -11,6 +12,7 @@ export default class NoteLinterPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    this.addSettingTab(new LinterSettingTab(this.app, this));
 
     this.registerView(
       DASHBOARD_VIEW_TYPE,
