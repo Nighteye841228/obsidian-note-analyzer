@@ -57,7 +57,7 @@ export class LinterSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Decay Index Threshold")
-      .setDesc("Flag a note when inactive days x eigenvector centrality x type weight reaches this value.")
+      .setDesc("Warning sensitivity score, not days. Lower values show more decay warnings; higher values only show stale notes that are more central in your vault. Default: 30.")
       .addText(text => text
         .setValue(String(this.plugin.settings.decayIndexThreshold))
         .onChange(async (value) => {

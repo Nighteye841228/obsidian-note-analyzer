@@ -87,16 +87,34 @@ export class LinterDashboardView extends ItemView {
   }
 
   private renderMessage(container: HTMLElement, message: string) {
-    const parts = message.split(/(\d+(?:\.\d+)?)/g);
+    const numberPattern = /\d+(?:\.\d+)?/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
 
-    for (const part of parts) {
-      if (part.length === 0) continue;
+    while ((match = numberPattern.exec(message)) !== null) {
+      if (match.index > lastIndex) {
+        container.createSpan({ text: message.slice(lastIndex, match.index) });
+      }
 
-      const span = container.createSpan({ text: part });
-      if (/^\d+(?:\.\d+)?$/.test(part)) {
+      const numberText = match[0];
+      const span = container.createSpan({ text: numberText });
+      if (this.shouldHighlightNumber(message, match.index, match.index + numberText.length)) {
         span.style.color = "var(--text-error)";
         span.style.fontWeight = "600";
       }
+
+      lastIndex = match.index + numberText.length;
     }
+
+    if (lastIndex < message.length) {
+      container.createSpan({ text: message.slice(lastIndex) });
+    }
+  }
+
+  private shouldHighlightNumber(message: string, start: number, end: number): boolean {
+    const previous = start > 0 ? message[start - 1] : "";
+    const next = end < message.length ? message[end] : "";
+
+    return !/[A-Za-z/]/.test(previous) && !/[A-Za-z/]/.test(next);
   }
 }
