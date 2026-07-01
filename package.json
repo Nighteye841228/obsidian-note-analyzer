@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
-    "test": "jest"
+    "test": "jest",
+    "test:unit": "jest --runTestsByPath tests/rules.unit.test.ts",
+    "test:feature": "jest --runTestsByPath tests/linter.feature.test.ts",
+    "test:integration": "jest --runTestsByPath tests/main.integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^16.11.26",
