@@ -6,10 +6,12 @@ export const DASHBOARD_VIEW_TYPE = "linter-dashboard-view";
 export class LinterDashboardView extends ItemView {
   private warnings: LinterWarning[] = [];
   private onNoteClick: (path: string) => void;
+  private collapsedCategories: Record<string, boolean> = {};
 
-  constructor(leaf: WorkspaceLeaf, onNoteClick: (path: string) => void) {
+  constructor(leaf: WorkspaceLeaf, onNoteClick: (path: string) => void, initialWarnings: LinterWarning[] = []) {
     super(leaf);
     this.onNoteClick = onNoteClick;
+    this.warnings = initialWarnings;
   }
 
   getViewType(): string {
@@ -59,8 +61,17 @@ export class LinterDashboardView extends ItemView {
       const categoryWarnings = grouped[category];
       if (!categoryWarnings || categoryWarnings.length === 0) continue;
 
-      container.createEl("h4", { text: category });
-      const ul = container.createEl("ul");
+      const details = container.createEl("details");
+      details.open = !this.collapsedCategories[category];
+      details.onToggle = () => {
+        this.collapsedCategories[category] = !details.open;
+      };
+
+      details.createEl("summary", {
+        text: `${category} (${categoryWarnings.length})`
+      });
+
+      const ul = details.createEl("ul");
       
       for (const warning of categoryWarnings) {
         const li = ul.createEl("li");
@@ -69,7 +80,22 @@ export class LinterDashboardView extends ItemView {
         link.style.textDecoration = "underline";
         link.onclick = () => this.onNoteClick(warning.path);
         
-        li.createSpan({ text: ` - ${warning.message}` });
+        li.createSpan({ text: " - " });
+        this.renderMessage(li, warning.message);
+      }
+    }
+  }
+
+  private renderMessage(container: HTMLElement, message: string) {
+    const parts = message.split(/(\d+(?:\.\d+)?)/g);
+
+    for (const part of parts) {
+      if (part.length === 0) continue;
+
+      const span = container.createSpan({ text: part });
+      if (/^\d+(?:\.\d+)?$/.test(part)) {
+        span.style.color = "var(--text-error)";
+        span.style.fontWeight = "600";
       }
     }
   }

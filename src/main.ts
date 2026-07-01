@@ -16,7 +16,7 @@ export default class NoteLinterPlugin extends Plugin {
 
     this.registerView(
       DASHBOARD_VIEW_TYPE,
-      (leaf) => new LinterDashboardView(leaf, this.openNote.bind(this))
+      (leaf) => new LinterDashboardView(leaf, this.openNote.bind(this), this.activeWarnings)
     );
 
     this.addRibbonIcon("alert-triangle", "Open Note Linter", () => {
@@ -69,6 +69,17 @@ export default class NoteLinterPlugin extends Plugin {
     this.runFullScan();
   }
 
+  private debug(message: string, data?: unknown) {
+    if (!this.settings.debugLogging) return;
+
+    if (data === undefined) {
+      console.log(`[Note Linter] ${message}`);
+      return;
+    }
+
+    console.log(`[Note Linter] ${message}`, data);
+  }
+
   async activateView() {
     const { workspace } = this.app;
     
@@ -108,14 +119,74 @@ export default class NoteLinterPlugin extends Plugin {
     return this.settings.mocTags.some(mocTag => tags.some(t => t.tag === mocTag));
   }
 
+  private getFileTags(file: TFile): string[] {
+    return (this.app.metadataCache.getFileCache(file)?.tags || []).map(tag => tag.tag);
+  }
+
+  private getDecayTypeWeight(file: TFile): number {
+    const tags = this.getFileTags(file);
+
+    if (this.settings.mocTags.some(mocTag => tags.includes(mocTag))) {
+      return this.settings.decayMocWeight;
+    }
+
+    if (this.settings.decayLiteratureTags.some(tag => tags.includes(tag))) {
+      return this.settings.decayLiteratureWeight;
+    }
+
+    if (this.settings.decayEvergreenTags.some(tag => tags.includes(tag))) {
+      return this.settings.decayEvergreenWeight;
+    }
+
+    return this.settings.decayDefaultWeight;
+  }
+
+  private calculateEigenvectorCentrality(paths: string[], graph: Record<string, Set<string>>): Record<string, number> {
+    if (paths.length === 0) return {};
+
+    let scores = Object.fromEntries(paths.map(path => [path, 1 / Math.sqrt(paths.length)])) as Record<string, number>;
+
+    for (let i = 0; i < 20; i++) {
+      const nextScores: Record<string, number> = {};
+
+      for (const path of paths) {
+        const neighbors = graph[path] || new Set<string>();
+        let score = 0.15;
+
+        for (const neighbor of neighbors) {
+          score += 0.85 * (scores[neighbor] || 0);
+        }
+
+        nextScores[path] = score;
+      }
+
+      const magnitude = Math.sqrt(Object.values(nextScores).reduce((sum, score) => sum + (score * score), 0)) || 1;
+      scores = Object.fromEntries(paths.map(path => [path, nextScores[path] / magnitude])) as Record<string, number>;
+    }
+
+    return scores;
+  }
+
   public runFullScan() {
     const files = this.app.vault.getMarkdownFiles();
+    const filePaths = new Set(files.map(file => file.path));
     this.metricsCache = {};
     const newWarnings: LinterWarning[] = [];
+    this.debug("Starting full scan", {
+      totalMarkdownFiles: files.length,
+      settings: this.settings
+    });
     
     // First pass: collect link relationships
     const inboundCounts: Record<string, number> = {};
+    const latestInboundLinkTimes: Record<string, number> = {};
     const mocEntryCounts: Record<string, number> = {};
+    const latestMocEntryTimes: Record<string, number> = {};
+    const linkGraph: Record<string, Set<string>> = {};
+
+    for (const file of files) {
+      linkGraph[file.path] = new Set<string>();
+    }
     
     for (const file of files) {
       const cache = this.app.metadataCache.getFileCache(file);
@@ -129,15 +200,24 @@ export default class NoteLinterPlugin extends Plugin {
         const targetPath = this.app.metadataCache.getFirstLinkpathDest(link.link, file.path)?.path;
         if (targetPath) {
           inboundCounts[targetPath] = (inboundCounts[targetPath] || 0) + 1;
+          latestInboundLinkTimes[targetPath] = Math.max(latestInboundLinkTimes[targetPath] || 0, file.stat.mtime);
+          if (filePaths.has(targetPath)) {
+            linkGraph[file.path].add(targetPath);
+            linkGraph[targetPath].add(file.path);
+          }
           if (isFileMoc) {
             mocEntryCounts[targetPath] = (mocEntryCounts[targetPath] || 0) + 1;
+            latestMocEntryTimes[targetPath] = Math.max(latestMocEntryTimes[targetPath] || 0, file.stat.mtime);
           }
         }
       }
     }
 
+    const centralityScores = this.calculateEigenvectorCentrality(files.map(file => file.path), linkGraph);
+
     // Second pass: evaluate files
     const now = Date.now();
+    const dayInMs = 24 * 60 * 60 * 1000;
     for (const file of files) {
       if (this.isExcluded(file)) continue;
 
@@ -145,34 +225,73 @@ export default class NoteLinterPlugin extends Plugin {
       const stat = file.stat;
       
       const outboundLinks = cache?.links?.length || 0;
-      const headers = cache?.headings?.filter(h => h.level === 1 || h.level === 2).length || 0;
+      const latestOutboundLinkTime = outboundLinks > 0 ? stat.mtime : null;
+      const headings = cache?.headings?.filter(h => h.level === 1 || h.level === 2 || h.level === 3).length || 0;
       
       // Simple word count heuristic based on stat.size since we don't want to read every file's content
       // 1 word ~= 5 bytes
       const estimatedWordCount = Math.floor(stat.size / 5);
       
       // Checkboxes (approximate via task cache if present)
+      const listItemCount = cache?.listItems?.length || 0;
       const todoCount = cache?.listItems?.filter(item => item.task !== undefined).length || 0;
+      const inactiveDays = (now - stat.mtime) / dayInMs;
+      const centralityScore = centralityScores[file.path] || 0;
+      const noteTypeWeight = this.getDecayTypeWeight(file);
+      const decayIndex = Math.max(0, inactiveDays) * centralityScore * noteTypeWeight;
 
       const metric: NoteMetrics = {
         path: file.path,
         createdTime: stat.ctime,
         modifiedTime: stat.mtime,
         inboundLinks: inboundCounts[file.path] || 0,
+        latestInboundLinkTime: latestInboundLinkTimes[file.path] || null,
         outboundLinks: outboundLinks,
+        latestOutboundLinkTime,
         mocEntries: mocEntryCounts[file.path] || 0,
+        latestMocEntryTime: latestMocEntryTimes[file.path] || null,
         wordCount: estimatedWordCount,
-        headerCount: headers,
-        todoCount: todoCount
+        headingCount: headings,
+        listItemCount,
+        todoCount: todoCount,
+        centralityScore,
+        noteTypeWeight,
+        inactiveDays: Math.max(0, inactiveDays),
+        decayIndex
       };
       
       this.metricsCache[file.path] = metric;
       
       const warnings = evaluateNote(metric, this.settings, now);
       newWarnings.push(...warnings);
+
+      if (warnings.length > 0) {
+        this.debug(`Warnings for ${file.path}`, {
+          metric,
+          warnings
+        });
+      }
     }
     
     this.activeWarnings = newWarnings;
+    this.debug("Finished full scan", {
+      evaluatedNotes: Object.keys(this.metricsCache).length,
+      warningCount: this.activeWarnings.length,
+      topDecayScores: Object.values(this.metricsCache)
+        .sort((a, b) => b.decayIndex - a.decayIndex)
+        .slice(0, 10)
+        .map(metric => ({
+          path: metric.path,
+          decayIndex: Number(metric.decayIndex.toFixed(2)),
+          inactiveDays: Math.floor(metric.inactiveDays),
+          centralityScore: Number(metric.centralityScore.toFixed(3)),
+          noteTypeWeight: metric.noteTypeWeight
+        })),
+      warningsByCategory: this.activeWarnings.reduce((acc, warning) => {
+        acc[warning.category] = (acc[warning.category] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>)
+    });
     
     // Update UI
     const leaves = this.app.workspace.getLeavesOfType(DASHBOARD_VIEW_TYPE);

@@ -5,7 +5,6 @@ export function evaluateNote(note: NoteMetrics, settings: LinterSettings, curren
   const DAY_IN_MS = 24 * 60 * 60 * 1000;
   
   const ageInDays = (currentTime - note.createdTime) / DAY_IN_MS;
-  const inactiveDays = (currentTime - note.modifiedTime) / DAY_IN_MS;
 
   // 1. Orphan Rule
   if (ageInDays > settings.orphanDaysThreshold && note.inboundLinks === 0 && note.outboundLinks === 0 && note.mocEntries === 0) {
@@ -17,22 +16,32 @@ export function evaluateNote(note: NoteMetrics, settings: LinterSettings, curren
   }
 
   // 2. Atomicity Violation
-  if (note.wordCount > settings.atomicityWordCount) {
+  if (settings.atomicityWordCountEnabled && note.wordCount > settings.atomicityWordCount) {
     warnings.push({
       path: note.path,
       category: WarningCategory.ATOMICITY,
       message: `Word count (${note.wordCount}) exceeds threshold (${settings.atomicityWordCount}).`
     });
-  } else if (note.headerCount > settings.atomicityHeaderCount) {
+  }
+
+  if (settings.atomicityHeadingCountEnabled && note.headingCount > settings.atomicityHeadingCount) {
     warnings.push({
       path: note.path,
       category: WarningCategory.ATOMICITY,
-      message: `Header count (${note.headerCount}) exceeds threshold (${settings.atomicityHeaderCount}).`
+      message: `H1/H2/H3 heading count (${note.headingCount}) exceeds threshold (${settings.atomicityHeadingCount}).`
+    });
+  }
+
+  if (settings.atomicityListItemCountEnabled && note.listItemCount > settings.atomicityListItemCount) {
+    warnings.push({
+      path: note.path,
+      category: WarningCategory.ATOMICITY,
+      message: `List item count (${note.listItemCount}) exceeds threshold (${settings.atomicityListItemCount}).`
     });
   }
 
   // 3. Knowledge Sink
-  if (note.inboundLinks > settings.blackHoleInboundThreshold && note.outboundLinks === 0) {
+  if (note.inboundLinks >= settings.blackHoleInboundThreshold && note.outboundLinks === 0) {
     warnings.push({
       path: note.path,
       category: WarningCategory.BLACK_HOLE,
@@ -41,12 +50,11 @@ export function evaluateNote(note: NoteMetrics, settings: LinterSettings, curren
   }
 
   // 4. Knowledge Decay
-  const isHighValue = note.inboundLinks > settings.decayInboundThreshold || note.mocEntries > 0;
-  if (isHighValue && inactiveDays > settings.decayDaysThreshold) {
+  if (note.decayIndex >= settings.decayIndexThreshold) {
     warnings.push({
       path: note.path,
       category: WarningCategory.DECAY,
-      message: `High value note has not been updated in ${Math.floor(inactiveDays)} days.`
+      message: `Not been updated ${Math.floor(note.inactiveDays)} days.`
     });
   }
 
